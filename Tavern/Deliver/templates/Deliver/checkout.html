@@ -1,0 +1,279 @@
+{% extends "Deliver/base.html" %}
+{% block title %}Checkout{% endblock %}
+
+{% block content %}
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+/* --- Checkout Stepper --- */
+.checkout-stepper { display: flex; justify-content: center; align-items: center; margin-bottom: 2rem; gap: 20px; }
+.step { display: flex; flex-direction: column; align-items: center; color: #adb5bd; font-weight: 600; }
+.step.active { color: #212529; }
+.step-circle { width: 32px; height: 32px; border-radius: 50%; background: #dee2e6; color: white; display: flex; align-items: center; justify-content: center; margin-bottom: 8px; }
+.step.active .step-circle { background: #343a40; }
+.step-line { width: 150px; height: 2px; background: #dee2e6; margin-bottom: 25px; }
+.step-line.filled { background: #28a745; }
+/* --- Map Modal --- */
+#mapModal .modal-dialog { position: fixed; margin: 0; width: 100%; max-width: 600px; height: 100%; left: 0; top: 0; transform: translate3d(-100%,0,0); transition: transform 0.3s ease-in-out; z-index: 1055; }
+#mapModal.show .modal-dialog { transform: translate3d(0,0,0); }
+#mapModal .modal-content { height: 100%; display: flex; flex-direction: column; border-radius: 0; border: none; }
+#mapModal .modal-body { padding: 1.5rem; flex:1; display: flex; flex-direction: column; gap:1rem; overflow-y:auto; }
+#map { min-height: 300px; width: 100%; border-radius: 8px; border:1px solid #ddd; }
+.modal-input { padding: 12px; border: 1px solid #ddd; border-radius: 4px; width: 100%; box-sizing: border-box; }
+.btn-save-address { background-color:#063b06; color:white; width:100%; padding:15px; border:none; font-weight:bold; text-transform:uppercase; }
+/* --- Search Container --- */
+.search-container { position: relative; width: 100%; margin-left: 0; }
+#address-results { position: absolute; top: 100%; left: 0; right: 0; background: white; border: 1px solid #ddd; border-top: none; z-index: 2000; display: none; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+.result-item { padding: 10px 15px; cursor: pointer; border-bottom: 1px solid #eee; font-size: 0.9rem; }
+.result-item:hover { background-color: #f8f9fa; }
+/* --- Order Summary --- */
+.sticky-summary { position: sticky; top: 20px; }
+.order-items-scroll { max-height: 300px; overflow-y: auto; }
+</style>
+
+<div class="container my-5">
+    <!-- Stepper -->
+    <div class="checkout-stepper">
+        <div class="step active"><div class="step-circle">1</div><span>Shopping Basket</span></div>
+        <div class="step-line filled"></div>
+        <div class="step active"><div class="step-circle">2</div><span>Details and Checkout</span></div>
+        <div class="step-line"></div>
+        <div class="step"><div class="step-circle">3</div><span>Confirmation</span></div>
+    </div>
+
+    <form method="POST" action="{% url 'checkout' %}">
+        {% csrf_token %}
+        <input type="hidden" name="building_name" id="building_name">
+        <input type="hidden" name="door_number" id="door_number">
+        <div class="row g-5">
+            <!-- Billing Details -->
+            <div class="col-lg-7">
+                <h4 class="mb-4">Billing Details</h4>
+                <div class="row g-3">
+                    <div class="col-md-6"><label class="form-label">First Name *</label><input type="text" name="first_name" class="form-control" required></div>
+                    <div class="col-md-6"><label class="form-label">Last Name *</label><input type="text" name="last_name" class="form-control" required></div>
+                    <div class="col-12"><label class="form-label">Phone *</label><input type="tel" name="phone" class="form-control" required></div>
+                    <div class="col-12"><label class="form-label">Email *</label><input type="email" name="email" class="form-control" required></div>
+
+                    <!-- Map Selection -->
+                    <div class="col-12">
+                        <label class="form-label">Delivery Location *</label>
+                        <div class="input-group mb-2">
+                            <input type="text" id="location_name" name="location_name" class="form-control bg-light" placeholder="Select from map" readonly required>
+                            <button type="button" class="btn btn-outline-success" data-bs-toggle="modal" data-bs-target="#mapModal">Select from Map</button>
+                        </div>
+                        <input type="hidden" name="latitude" id="latitude">
+                        <input type="hidden" name="longitude" id="longitude">
+                    </div>
+
+                    <div class="col-12 mt-4">
+                        <label class="form-label">Order Notes (Optional)</label>
+                        <textarea name="order_notes" class="form-control" rows="3"></textarea>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Order Summary -->
+            <div class="col-lg-5">
+                <div class="p-4 border rounded shadow-sm bg-white sticky-summary">
+                    <h5 class="mb-4 fw-bold">Your delivery</h5>
+                    <div class="order-items-scroll pe-2">
+                        {% for item in items %}
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <div class="d-flex align-items-center">
+                                <img src="{{ item.product.image.url }}" style="width: 45px; height: 45px; object-fit: cover; border-radius: 5px;" class="me-3">
+                                <div>
+                                    <div class="small fw-bold">{{ item.product.name }}</div>
+                                    <div class="small text-muted">× {{ item.quantity }}</div>
+                                </div>
+                            </div>
+                            <span class="small fw-bold">KSh {{ item.total_price|floatformat:0 }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+
+                    <hr class="my-4">
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">Subtotal (ex. VAT)</span><span>KSh {{ subtotal_ex_vat|floatformat:0 }}</span></div>
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">VAT (16%)</span><span>KSh {{ vat_amount|floatformat:0 }}</span></div>
+
+                    <!-- Delivery Info -->
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">Delivery Fee</span><span class="delivery-fee">{% if delivery_fee %}KSh {{ delivery_fee|floatformat:0 }}{% else %}<span class="text-muted small">Calculated after location selection</span>{% endif %}</span></div>
+                    <div class="d-flex justify-content-between mb-2"><span class="text-muted">Distance</span><span class="distance">{% if distance %}{{ distance|floatformat:2 }} km{% else %}-{% endif %}</span></div>
+                    <div class="d-flex justify-content-between mb-3"><span class="text-muted">Delivery Zone</span><span class="zone">{% if delivery_zone %}{{ delivery_zone }}{% else %}-{% endif %}</span></div>
+
+                    <!-- FINAL TOTAL -->
+                    <div class="d-flex justify-content-between mb-4">
+                        <span class="fs-4 fw-bold">Total</span>
+                        <span class="fs-4 fw-bold text-success total">KSh {{ total|floatformat:0 }}</span>
+                    </div>
+
+                    <div class="payment-option border p-3 rounded mb-3 bg-light">
+                        <div class="form-check d-flex align-items-center justify-content-between w-100">
+                            <div class="flex-grow-1">
+                                <input class="form-check-input" type="radio" name="payment" value="intasend" id="intasend" checked>
+                                <label class="form-check-label fw-bold" for="intasend">Pay with M-Pesa</label>
+                            </div>
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/1/15/M-PESA_LOGO-01.svg" alt="M-Pesa" style="height: 25px; width: auto; object-fit: contain;">
+                        </div>
+                        <p class="small text-muted mt-2 mb-0">You will be redirected to M-Pesa to complete payment securely.</p>
+                    </div>
+
+                    <p style="font-size: 0.7rem;" class="text-muted mb-3">By placing an order, I confirm I am 18+ and accept the terms and conditions.</p>
+                    <button type="submit" class="btn btn-success w-100 py-3 fw-bold">PROCEED TO PAYMENT</button>
+                </div>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- MAP MODAL -->
+<div class="modal fade" id="mapModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header border-0 pb-0">
+                <button type="button" class="btn-close fs-4" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <h5 class="fw-bold mb-3">Add your location</h5>
+
+                <div class="search-container mb-2">
+                    <input type="text" id="modal_search" class="modal-input" placeholder="Search building, street, or area...">
+                    <div id="address-results"></div>
+                </div>
+
+                <div class="d-flex mb-2">
+                    <button type="button" id="currentLocationBtn" class="btn btn-outline-primary w-100">Use Current Location</button>
+                </div>
+
+                <div id="map" style="min-height: 400px;"></div>
+                <input type="text" id="modal_door" class="modal-input mt-2" placeholder="Door / Flat no. (Optional)">
+            </div>
+            <div class="modal-footer border-0 p-0">
+                <button type="button" class="btn-save-address" id="saveLocationBtn">SAVE ADDRESS & PROCEED</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let map, marker;
+const mapModal = document.getElementById('mapModal');
+const searchInput = document.getElementById('modal_search');
+const resultsContainer = document.getElementById('address-results');
+const currentLocationBtn = document.getElementById('currentLocationBtn');
+
+// Initialize map
+mapModal.addEventListener('shown.bs.modal', () => {
+    if (!map) {
+        map = L.map('map').setView([-1.286389, 36.817223], 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+        map.on('click', (e) => updateMarker(e.latlng.lat, e.latlng.lng));
+    }
+    setTimeout(() => map.invalidateSize(), 200);
+});
+
+function updateMarker(lat, lng) {
+    const latlng = [lat, lng];
+    if (marker) {
+        marker.setLatLng(latlng);
+    } else {
+        marker = L.marker(latlng, { draggable: true }).addTo(map);
+        marker.on('dragend', function(e) {
+            const pos = e.target.getLatLng();
+            document.getElementById('latitude').value = pos.lat;
+            document.getElementById('longitude').value = pos.lng;
+            updateDeliveryFee(pos.lat, pos.lng);
+        });
+    }
+    map.setView(latlng, 17);
+    document.getElementById('latitude').value = lat;
+    document.getElementById('longitude').value = lng;
+    updateDeliveryFee(lat, lng);
+}
+
+// --- AJAX Delivery Fee ---
+function updateDeliveryFee(lat, lng) {
+    fetch(`/ajax/delivery/?lat=${lat}&lng=${lng}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.error) return;
+            document.querySelector('.delivery-fee').innerHTML = `KSh ${data.delivery_fee}`;
+            document.querySelector('.distance').innerHTML = `${data.distance} km`;
+            document.querySelector('.zone').innerHTML = data.zone;
+
+            let subtotal = parseFloat("{{ subtotal_ex_vat|floatformat:0 }}") || 0;
+            let vat = parseFloat("{{ vat_amount|floatformat:0 }}") || 0;
+            let total = subtotal + vat + data.delivery_fee;
+            document.querySelector('.total').innerHTML = `KSh ${total}`;
+        });
+}
+
+// --- Search Autocomplete ---
+let debounceTimer;
+searchInput.addEventListener('input', function() {
+    clearTimeout(debounceTimer);
+    const query = this.value;
+    if (query.length < 3) { resultsContainer.style.display = 'none'; return; }
+
+    debounceTimer = setTimeout(() => {
+        fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5&countrycodes=ke`)
+        .then(res => res.json())
+        .then(data => {
+            resultsContainer.innerHTML = '';
+            if (data.length) {
+                resultsContainer.style.display = 'block';
+                data.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'result-item';
+                    div.textContent = item.display_name;
+                    div.onclick = () => {
+                        searchInput.value = item.display_name;
+                        updateMarker(parseFloat(item.lat), parseFloat(item.lon));
+                        resultsContainer.style.display = 'none';
+                    };
+                    resultsContainer.appendChild(div);
+                });
+            } else resultsContainer.style.display = 'none';
+        });
+    }, 300);
+});
+document.addEventListener('click', e => { if (!searchInput.contains(e.target)) resultsContainer.style.display = 'none'; });
+
+// --- Use Current Location ---
+currentLocationBtn.addEventListener('click', () => {
+    if (!navigator.geolocation) { alert("Geolocation not supported"); return; }
+    navigator.geolocation.getCurrentPosition(
+        (position) => {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            updateMarker(lat, lng);
+            fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`)
+                .then(res => res.json())
+                .then(data => { searchInput.value = data.display_name || ''; });
+        },
+        () => { alert("Unable to retrieve location"); },
+        { enableHighAccuracy: true, timeout: 10000 }
+    );
+});
+
+// --- Save Location & Close Modal ---
+document.getElementById('saveLocationBtn').addEventListener('click', function() {
+    const address = searchInput.value;
+    const door = document.getElementById('modal_door').value;
+    const lat = document.getElementById('latitude').value;
+    const lng = document.getElementById('longitude').value;
+
+    if (!lat || !lng) { alert("Select a location first"); return; }
+
+    document.getElementById('location_name').value = address;
+    document.getElementById('building_name').value = address;
+    document.getElementById('door_number').value = door;
+
+    const modalInstance = bootstrap.Modal.getInstance(mapModal);
+    modalInstance.hide();
+});
+</script>
+
+{% endblock %}
